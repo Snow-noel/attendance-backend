@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 
 const jsonwebtoken = require('jsonwebtoken');
 
-const verifyToken= require("./malware")
+const {verifyToken, verifyLecturer}= require("./malware")
 
 const express= require('express');
 
@@ -24,7 +24,7 @@ app.listen(port, ()=>{
     console.log(`server running at port ${3000}`)
 });
 
-app.post("/session/start", async(req, res) => {
+app.post("/session/start", verifyToken, verifyLecturer, async(req, res) => {
 
     const { module_id, lecturer_id } = req.body;
 
@@ -139,4 +139,67 @@ app.post("/student/login", async(req, res) => {
     }catch (err){
         res.status(500).json({message: "error while logging in ", error:err})
     }
+})
+
+
+app.post("/lecturer/register", async (req, res) =>{
+    
+    const {first_name, last_name, email, password} = req.body
+
+    try{
+        const hashedPassword = await bcrypt.hash(password,10);
+
+        const result = await pool.query(
+        `INSERT INTO lecturers(first_name, last_name, email, password) VALUES($1, $2, $3, $4) RETURNING *`,
+        [first_name, last_name, email, hashedPassword]
+    );
+    
+    res.json({
+        message: "lecturer registered successifully",
+        lecturer: result.rows[0]
+    })
+
+    }catch (err) {
+    console.log(err);
+    res.status(500).json({ message: "Error registering lecturer", error: err.message });
+}
+
+})
+
+app.post("/lecturer/login", async(req, res) =>{
+    const {email, password} = req.body
+
+    try{
+        const result = await pool.query(
+        `SELECT * FROM lecturers WHERE email= $1`,[email]
+    )
+
+    if(result.rows.length == 0){
+        return res.status(404).json({message: "lecturer not found"})
+    }
+
+    const lecturer = result.rows[0]
+
+    const matchpassword = await bcrypt.compare(password, lecturer.password)
+
+    if(!matchpassword) return res.status(401).json({message: "incorrect password"})
+
+    const token = jsonwebtoken.sign(
+        {id: lecturer.id, email: lecturer.email, role: "lecturer"},
+        process.env.JWT_SECRET,
+        {expiresIn: "8h"}
+    )
+
+    res.json({
+        message: "login successifully",
+        token:token
+    });
+
+    }catch (err){
+        res.status(500).json({
+            message: "error while logging in ", error: err.message
+        });
+    }
+
+
 })
