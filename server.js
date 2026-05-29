@@ -20,9 +20,6 @@ app.get("/", (req, res) =>{
     res.json({message: "Attendance server is running"});
 });
 
-app.listen(port, ()=>{
-    console.log(`server running at port ${3000}`)
-});
 
 app.post("/session/start", verifyToken, verifyLecturer, async(req, res) => {
 
@@ -201,5 +198,92 @@ app.post("/lecturer/login", async(req, res) =>{
         });
     }
 
+})
+
+app.get("/session/:sessionId/attendance", async(req, res) =>{
+    const {sessionId} = req.params
+
+    try{
+            const result = await pool.query(
+        `SELECT 
+            students.registration_number,
+            students.first_name,
+            students.last_name,
+            attendance.marked_at
+        FROM attendance
+        JOIN students ON attendance.student_id = students.id
+        WHERE attendance.session_id = $1`, [sessionId]
+    );
+
+    res.json({
+        message: "Attendance retrieved succesifully",
+        total: result.rows.length,
+        attendance:result.rows
+    })
+
+    }catch (err){
+        res.status(500).json({message: "error while retrieving attendance list", error: err.message})
+    }
+
 
 })
+
+app.get("/student/attendance", verifyToken, async (req, res) => {
+    const studentId = req.user.id;
+
+    try {
+        const result = await pool.query(
+            `SELECT 
+                modules.name AS module_name,
+                sessions.created_at AS session_date,
+                attendance.marked_at
+             FROM attendance
+             JOIN sessions ON attendance.session_id = sessions.id
+             JOIN modules ON sessions.module_id = modules.id
+             WHERE attendance.student_id = $1`,
+            [studentId]
+        );
+
+        res.json({
+            message: "Attendance record retrieved successfully",
+            total: result.rows.length,
+            attendance: result.rows
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: "Error retrieving attendance", error: err.message });
+    }
+});
+
+app.get("/module/:moduleId/sessions", verifyToken, verifyLecturer, async (req, res) => {
+    const { moduleId } = req.params;
+
+    try {
+        const result = await pool.query(
+            `SELECT 
+                sessions.id,
+                sessions.session_code,
+                sessions.expires_at,
+                sessions.created_at,
+                COUNT(attendance.id) AS total_present
+             FROM sessions
+             LEFT JOIN attendance ON attendance.session_id = sessions.id
+             WHERE sessions.module_id = $1
+             GROUP BY sessions.id`,
+            [moduleId]
+        );
+
+        res.json({
+            message: "Sessions retrieved successfully",
+            total: result.rows.length,
+            sessions: result.rows
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: "Error retrieving sessions", error: err.message });
+    }
+});
+
+app.listen(port, ()=>{
+    console.log(`server running at port ${3000}`)
+});
