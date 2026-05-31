@@ -126,7 +126,7 @@ app.post("/student/login", async(req, res) => {
 
 
         const token = jsonwebtoken.sign(
-            {id: student.id, email: student.email, role: "student"},
+            {id: student.id, email: student.email, first_name: student.first_name, last_name: student.last_name, role: "student"},
             process.env.JWT_SECRET,
             {expiresIn: "8h"}
         );
@@ -185,7 +185,7 @@ app.post("/lecturer/login", async(req, res) =>{
     if(!matchpassword) return res.status(401).json({message: "incorrect password"})
 
     const token = jsonwebtoken.sign(
-        {id: lecturer.id, email: lecturer.email, role: "lecturer"},
+        {id: lecturer.id, email: lecturer.email, first_name: `${lecturer.first_name[0]}.`, last_name: lecturer.last_name, role: "lecturer"},
         process.env.JWT_SECRET,
         {expiresIn: "8h"}
     )
