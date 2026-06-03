@@ -295,3 +295,39 @@ app.get("/module/:moduleId/sessions", verifyToken, verifyLecturer, async (req, r
 app.listen(port, ()=>{
     console.log(`server running at port ${3000}`)
 });
+
+
+app.get("/schools", async (req, res) => {
+    try {
+        const result = await pool.query(`SELECT * FROM schools ORDER BY name`);
+        res.json({ schools: result.rows });
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching schools", error: err.message });
+    }
+});
+
+app.get("/departments/:schoolId", async (req, res) => {
+    const { schoolId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT * FROM departments WHERE school_id = $1 ORDER BY name`,
+            [schoolId]
+        );
+        res.json({ departments: result.rows });
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching departments", error: err.message });
+    }
+});
+
+app.get("/programs/:departmentId", async (req, res) => {
+    const { departmentId } = req.params;
+    try {
+        const result = await pool.query(
+            `SELECT * FROM programs WHERE department_id = $1 ORDER BY name`,
+            [departmentId]
+        );
+        res.json({ programs: result.rows });
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching programs", error: err.message });
+    }
+});
