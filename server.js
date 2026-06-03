@@ -99,9 +99,14 @@ app.post("/student/register", async(req, res) => {
             message: "student registered successifully",
             student:result.rows[0]
         });
-    }catch (err){
-        res.status(500).json({message: "error while registering a student", error: err})
+    }catch (err) {
+    if (err.code === "23505") {
+        return res.status(400).json({ 
+            message: "A student with that email or registration number already exists." 
+        });
     }
+    res.status(500).json({ message: "Error while registering a student", error: err.message });
+}
 });
 
 app.post("/student/login", async(req, res) => {
@@ -143,7 +148,6 @@ app.post("/student/login", async(req, res) => {
 
 
 app.post("/lecturer/register", async (req, res) =>{
-    
     const {first_name, last_name, email, password} = req.body
 
     try{
@@ -162,6 +166,7 @@ app.post("/lecturer/register", async (req, res) =>{
     }catch (err) {
     console.log(err);
     res.status(500).json({ message: "Error registering lecturer", error: err.message });
+    
 }
 
 })
