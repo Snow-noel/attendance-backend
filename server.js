@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 
 const jsonwebtoken = require('jsonwebtoken');
 
-const {verifyToken, verifyLecturer}= require("./malware")
+const {verifyToken, verifyLecturer, verifyAdmin}= require("./malware")
 
 const express= require('express');
 
@@ -46,7 +46,8 @@ app.post("/session/start", verifyToken, verifyLecturer, async(req, res) => {
     }});
 
 app.post("/attendance/mark", verifyToken, async(req, res) => {
-    const { student_id, session_code } = req.body;
+    const { session_code } = req.body;
+    const student_id = req.user.id;
 
    
    
@@ -208,7 +209,114 @@ app.post("/lecturer/login", async(req, res) =>{
 
 })
 
-app.get("/session/:sessionId/attendance", async(req, res) =>{
+app.post("/admin/login", async(req, res) =>{
+    const {email, password} = req.body;
+
+    try{
+        const result = await pool.query(
+        `SELECT * FROM admins WHERE email = $1`,[email]
+        );
+
+        if(result.rows.length == 0){
+        return res.status(404).json({message: "admin not found"})
+        }
+
+        const admin = result.rows[0];
+
+        const matchpassword = await bcrypt.compare(password, admin.password);
+
+        
+        if(!matchpassword){
+            return res.status(401).json({message: "incorrect password"})
+        }
+        
+        const token = jsonwebtoken.sign(
+            {id: admin.id, email: admin.email, password: admin.password, role: "admin", first_name:admin.first_name, last_name:admin.last_name },
+            process.env.JWT_SECRET,
+            {expiresIn: "8h"}
+        );
+        res.json({
+            message: "admin logged in successifully",
+            token: token
+        })
+        }catch(err){
+            res.status(500).json({message: "error while logging in", error:err})
+        }
+    
+
+    })
+
+app.post("/admin/create-lecturer", verifyToken, verifyAdmin, async (req, res) => {
+    const { first_name, last_name, email, password } = req.body;
+
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const result = await pool.query(
+            `INSERT INTO lecturers (first_name, last_name, email, password)
+             VALUES ($1, $2, $3, $4) RETURNING *`,
+            [first_name, last_name, email, hashedPassword]
+        );
+
+        res.json({
+            message: "Lecturer created successfully",
+            lecturer: result.rows[0]
+        });
+
+    } catch (err) {
+        if (err.code === "23505") {
+            return res.status(400).json({ message: "A lecturer with that email already exists." });
+        }
+        res.status(500).json({ message: "Error creating lecturer", error: err.message });
+    }
+});
+
+app.get("/admin/lecturers", verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, first_name, last_name, email, created_at 
+             FROM lecturers ORDER BY first_name`
+        );
+
+        res.json({
+            message: "Lecturers retrieved successfully",
+            total: result.rows.length,
+            lecturers: result.rows
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: "Error retrieving lecturers", error: err.message });
+    }
+});
+
+app.get("/admin/students", verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT 
+                students.id,
+                students.first_name,
+                students.last_name,
+                students.email,
+                students.registration_number,
+                programs.name AS program_name,
+                students.created_at
+             FROM students
+             JOIN programs ON students.program_id = programs.id
+             ORDER BY students.first_name`
+        );
+
+        res.json({
+            message: "Students retrieved successfully",
+            total: result.rows.length,
+            students: result.rows
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: "Error retrieving students", error: err.message });
+    }
+});
+
+app.get("/session/:sessionId/attendance", verifyToken, async(req, res) =>{
     const {sessionId} = req.params
 
     try{
@@ -292,10 +400,6 @@ app.get("/module/:moduleId/sessions", verifyToken, verifyLecturer, async (req, r
     }
 });
 
-app.listen(port, ()=>{
-    console.log(`server running at port ${3000}`)
-});
-
 
 app.get("/schools", async (req, res) => {
     try {
@@ -331,3 +435,8 @@ app.get("/programs/:departmentId", async (req, res) => {
         res.status(500).json({ message: "Error fetching programs", error: err.message });
     }
 });
+
+app.listen(port, ()=>{
+    console.log(`server running at port ${3000}`)
+});
+
