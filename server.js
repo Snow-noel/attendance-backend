@@ -1,298 +1,395 @@
 const pool = require("./database");
 
-const bcrypt = require('bcrypt');
+const bcrypt = require("bcrypt");
 
-const jsonwebtoken = require('jsonwebtoken');
+const jsonwebtoken = require("jsonwebtoken");
 
-const {verifyToken, verifyLecturer, verifyAdmin}= require("./malware")
+const { verifyToken, verifyLecturer, verifyAdmin } = require("./malware");
 
-const express= require('express');
+const express = require("express");
 
-const app= express();
+const app = express();
 
-const port =3000
+const port = 3000;
 
 const cors = require("cors");
 app.use(cors({ origin: "http://localhost:5173" }));
 
-const {v4: uuidv4}= require('uuid');
+const { v4: uuidv4 } = require("uuid");
 
-app.use(express.json())
+app.use(express.json());
 
-app.get("/", (req, res) =>{
-    res.json({message: "Attendance server is running"});
+app.get("/", (req, res) => {
+  res.json({ message: "Attendance server is running" });
 });
 
+app.post("/session/start", verifyToken, verifyLecturer, async (req, res) => {
+  const { module_id, lecturer_id } = req.body;
 
-app.post("/session/start", verifyToken, verifyLecturer, async(req, res) => {
+  const sessionCode = uuidv4().slice(0, 8).toLocaleUpperCase();
 
-    const { module_id, lecturer_id } = req.body;
-
-    const sessionCode = uuidv4().slice(0, 8).toLocaleUpperCase();
-
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    try{
-        const result = await pool.query(
-            `INSERT INTO sessions (module_id,session_code, expires_at)
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+  try {
+    const result = await pool.query(
+      `INSERT INTO sessions (module_id,session_code, expires_at)
              VALUES ($1, $2, $3) RETURNING *`,
-            [module_id,sessionCode, expiresAt]
-        );
-        res.json({
-        message: "Session started",
-        session: result.rows[0],
+      [module_id, sessionCode, expiresAt],
+    );
+    res.json({
+      message: "Session started",
+      session: result.rows[0],
     });
-    } catch (err){
-        res.status(500).json({ message: "Error starting session", error: err.message})
-    }});
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error starting session", error: err.message });
+  }
+});
 
-app.post("/attendance/mark", verifyToken, async(req, res) => {
-    const { session_code } = req.body;
-    const student_id = req.user.id;
+app.post("/attendance/mark", verifyToken, async (req, res) => {
+  const { session_code } = req.body;
+  const student_id = req.user.id;
 
-   
-   
-   try{
-        const session= await pool.query(
-        `SELECT * FROM sessions WHERE session_code = $1`,
-        [session_code]
+  try {
+    const session = await pool.query(
+      `SELECT * FROM sessions WHERE session_code = $1`,
+      [session_code],
     );
 
-    if(session.rows.length==0){
-        return res.status(404).json({message: "invalid session"})
+    if (session.rows.length == 0) {
+      return res.status(404).json({ message: "invalid session" });
     }
     const now = new Date();
     const expiry = new Date(session.rows[0].expires_at);
 
     if (now > expiry) {
-        return res.status(400).json({
-            message: "QR code has expired. Ask your lecturer to regenerate."
-        });
+      return res.status(400).json({
+        message: "QR code has expired. Ask your lecturer to regenerate.",
+      });
     }
-const sessionResult = await pool.query(
-    `INSERT INTO attendance (session_id, student_id) VALUES ($1, $2)
+    const sessionResult = await pool.query(
+      `INSERT INTO attendance (session_id, student_id) VALUES ($1, $2)
      RETURNING *`,
-    [session.rows[0].id, student_id]
-);
-    res.json({
-        message: "Attendance marked present",
-        attendance:sessionResult.rows[0]
-    });
-}catch(err){
-    res.status(500).json({message:"error while marking the attendance",error:err})
-}
-
-});
-
-
-app.post("/student/register", async(req, res) => {
-    const {registration_number, first_name, last_name, email, password, program_id}= req.body;
-
-    try{
-        
-        const hashedPassword = await bcrypt.hash(password,10);
-
-        const result = await pool.query(
-            `INSERT INTO students(registration_number, first_name, last_name, email, password, program_id) 
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`, [registration_number,first_name,last_name,email,hashedPassword,program_id]
-        )
-
-        res.json({
-            message: "student registered successifully",
-            student:result.rows[0]
-        });
-    }catch (err) {
-    if (err.code === "23505") {
-        return res.status(400).json({ 
-            message: "A student with that email or registration number already exists." 
-        });
-    }
-    res.status(500).json({ message: "Error while registering a student", error: err.message });
-}
-});
-
-app.post("/student/login", async(req, res) => {
-    const {email,password}= req.body
-
-    try{
-        const result = await pool.query(
-            `SELECT * FROM students WHERE email = $1`,[email]
-        )
-
-        if(result.rows.length==0){
-            return res.status(404).json({message: "Student not found"})
-        }
-
-        const student = result.rows[0];
-
-        const comparePassword = await bcrypt.compare(password, student.password);
-
-        if(!comparePassword){
-            return res.status(401).json({message: "incorrect password"})
-        }
-
-
-        const token = jsonwebtoken.sign(
-            {id: student.id, email: student.email, first_name: student.first_name, last_name: student.last_name, role: "student"},
-            process.env.JWT_SECRET,
-            {expiresIn: "8h"}
-        );
-
-        res.json({
-            message: "Student login successifully",
-            token: token
-
-        })
-    }catch (err){
-        res.status(500).json({message: "error while logging in ", error:err})
-    }
-})
-
-
-app.post("/lecturer/register", async (req, res) =>{
-    const {first_name, last_name, email, password} = req.body
-
-    try{
-        const hashedPassword = await bcrypt.hash(password,10);
-
-        const result = await pool.query(
-        `INSERT INTO lecturers(first_name, last_name, email, password) VALUES($1, $2, $3, $4) RETURNING *`,
-        [first_name, last_name, email, hashedPassword]
+      [session.rows[0].id, student_id],
     );
-    
     res.json({
-        message: "lecturer registered successifully",
-        lecturer: result.rows[0]
-    })
+      message: "Attendance marked present",
+      attendance: sessionResult.rows[0],
+    });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "error while marking the attendance", error: err });
+  }
+});
 
-    }catch (err) {
-    console.log(err);
-    res.status(500).json({ message: "Error registering lecturer", error: err.message });
-    
-}
+app.post("/student/register", async (req, res) => {
+  const {
+    registration_number,
+    first_name,
+    last_name,
+    email,
+    password,
+    program_id,
+  } = req.body;
 
-})
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-app.post("/lecturer/login", async(req, res) =>{
-    const {email, password} = req.body
+    const result = await pool.query(
+      `INSERT INTO students(registration_number, first_name, last_name, email, password, program_id) 
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [
+        registration_number,
+        first_name,
+        last_name,
+        email,
+        hashedPassword,
+        program_id,
+      ],
+    );
 
-    try{
-        const result = await pool.query(
-        `SELECT * FROM lecturers WHERE email= $1`,[email]
-    )
+    res.json({
+      message: "student registered successifully",
+      student: result.rows[0],
+    });
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(400).json({
+        message:
+          "A student with that email or registration number already exists.",
+      });
+    }
+    res.status(500).json({
+      message: "Error while registering a student",
+      error: err.message,
+    });
+  }
+});
 
-    if(result.rows.length == 0){
-        return res.status(404).json({message: "lecturer not found"})
+app.post("/student/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const result = await pool.query(`SELECT * FROM students WHERE email = $1`, [
+      email,
+    ]);
+
+    if (result.rows.length == 0) {
+      return res.status(404).json({ message: "Student not found" });
     }
 
-    const lecturer = result.rows[0]
+    const student = result.rows[0];
 
-    const matchpassword = await bcrypt.compare(password, lecturer.password)
+    const comparePassword = await bcrypt.compare(password, student.password);
 
-    if(!matchpassword) return res.status(401).json({message: "incorrect password"})
+    if (!comparePassword) {
+      return res.status(401).json({ message: "incorrect password" });
+    }
 
     const token = jsonwebtoken.sign(
-        {id: lecturer.id, email: lecturer.email, first_name: `${lecturer.first_name[0]}.`, last_name: lecturer.last_name, role: "lecturer"},
-        process.env.JWT_SECRET,
-        {expiresIn: "8h"}
-    )
+      {
+        id: student.id,
+        email: student.email,
+        first_name: student.first_name,
+        last_name: student.last_name,
+        role: "student",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" },
+    );
 
     res.json({
-        message: "login successifully",
-        token:token
+      message: "Student login successifully",
+      token: token,
     });
+  } catch (err) {
+    res.status(500).json({ message: "error while logging in ", error: err });
+  }
+});
 
-    }catch (err){
-        res.status(500).json({
-            message: "error while logging in ", error: err.message
-        });
+app.post("/lecturer/register", async (req, res) => {
+  const { first_name, last_name, email, password } = req.body;
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO lecturers(first_name, last_name, email, password) VALUES($1, $2, $3, $4) RETURNING *`,
+      [first_name, last_name, email, hashedPassword],
+    );
+
+    res.json({
+      message: "lecturer registered successifully",
+      lecturer: result.rows[0],
+    });
+  } catch (err) {
+    console.log(err);
+    res
+      .status(500)
+      .json({ message: "Error registering lecturer", error: err.message });
+  }
+});
+
+app.post("/lecturer/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const result = await pool.query(`SELECT * FROM lecturers WHERE email= $1`, [
+      email,
+    ]);
+
+    if (result.rows.length == 0) {
+      return res.status(404).json({ message: "lecturer not found" });
     }
 
-})
+    const lecturer = result.rows[0];
 
-app.post("/admin/login", async(req, res) =>{
-    const {email, password} = req.body;
+    const matchpassword = await bcrypt.compare(password, lecturer.password);
 
-    try{
-        const result = await pool.query(
-        `SELECT * FROM admins WHERE email = $1`,[email]
-        );
+    if (!matchpassword)
+      return res.status(401).json({ message: "incorrect password" });
 
-        if(result.rows.length == 0){
-        return res.status(404).json({message: "admin not found"})
-        }
+    const token = jsonwebtoken.sign(
+      {
+        id: lecturer.id,
+        email: lecturer.email,
+        first_name: `${lecturer.first_name[0]}.`,
+        last_name: lecturer.last_name,
+        role: "lecturer",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" },
+    );
 
-        const admin = result.rows[0];
+    res.json({
+      message: "login successifully",
+      token: token,
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "error while logging in ",
+      error: err.message,
+    });
+  }
+});
 
-        const matchpassword = await bcrypt.compare(password, admin.password);
+app.post("/admin/login", async (req, res) => {
+  const { email, password } = req.body;
 
-        
-        if(!matchpassword){
-            return res.status(401).json({message: "incorrect password"})
-        }
-        
-        const token = jsonwebtoken.sign(
-            {id: admin.id, email: admin.email, password: admin.password, role: "admin", first_name:admin.first_name, last_name:admin.last_name },
-            process.env.JWT_SECRET,
-            {expiresIn: "8h"}
-        );
-        res.json({
-            message: "admin logged in successifully",
-            token: token
-        })
-        }catch(err){
-            res.status(500).json({message: "error while logging in", error:err})
-        }
-    
+  try {
+    const result = await pool.query(`SELECT * FROM admins WHERE email = $1`, [
+      email,
+    ]);
 
-    })
+    if (result.rows.length == 0) {
+      return res.status(404).json({ message: "admin not found" });
+    }
 
-app.post("/admin/create-lecturer", verifyToken, verifyAdmin, async (req, res) => {
+    const admin = result.rows[0];
+
+    const matchpassword = await bcrypt.compare(password, admin.password);
+
+    if (!matchpassword) {
+      return res.status(401).json({ message: "incorrect password" });
+    }
+
+    const token = jsonwebtoken.sign(
+      {
+        id: admin.id,
+        email: admin.email,
+        password: admin.password,
+        role: "admin",
+        first_name: admin.first_name,
+        last_name: admin.last_name,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" },
+    );
+    res.json({
+      message: "admin logged in successifully",
+      token: token,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "error while logging in", error: err });
+  }
+});
+
+app.post(
+  "/admin/create-lecturer",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
     const { first_name, last_name, email, password } = req.body;
 
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await bcrypt.hash(password, 10);
 
-        const result = await pool.query(
-            `INSERT INTO lecturers (first_name, last_name, email, password)
+      const result = await pool.query(
+        `INSERT INTO lecturers (first_name, last_name, email, password)
              VALUES ($1, $2, $3, $4) RETURNING *`,
-            [first_name, last_name, email, hashedPassword]
-        );
+        [first_name, last_name, email, hashedPassword],
+      );
 
-        res.json({
-            message: "Lecturer created successfully",
-            lecturer: result.rows[0]
-        });
-
+      res.json({
+        message: "Lecturer created successfully",
+        lecturer: result.rows[0],
+      });
     } catch (err) {
-        if (err.code === "23505") {
-            return res.status(400).json({ message: "A lecturer with that email already exists." });
-        }
-        res.status(500).json({ message: "Error creating lecturer", error: err.message });
+      if (err.code === "23505") {
+        return res
+          .status(400)
+          .json({ message: "A lecturer with that email already exists." });
+      }
+      res
+        .status(500)
+        .json({ message: "Error creating lecturer", error: err.message });
     }
-});
+  },
+);
+
+app.post(
+  "/session/:sessionId/end",
+  verifyToken,
+  verifyLecturer,
+  async (req, res) => {
+    const { sessionId } = req.params;
+
+    try {
+      const sessionResult = await pool.query(
+        `SELECT sessions.id, sessions.module_id, modules.program_id 
+             FROM sessions 
+             JOIN modules ON sessions.module_id = modules.id
+             WHERE sessions.id = $1`,
+        [sessionId],
+      );
+
+      if (sessionResult.rows.length === 0) {
+        return res.status(404).json({ message: "Session not found." });
+      }
+
+      const { module_id, program_id } = sessionResult.rows[0];
+
+      const studentsResult = await pool.query(
+        `SELECT id FROM students WHERE program_id = $1`,
+        [program_id],
+      );
+
+      const presentResult = await pool.query(
+        `SELECT student_id FROM attendance WHERE session_id = $1`,
+        [sessionId],
+      );
+
+      const presentIds = presentResult.rows.map((row) => row.student_id);
+
+      const absentStudents = studentsResult.rows.filter(
+        (student) => !presentIds.includes(student.id),
+      );
+
+      for (const student of absentStudents) {
+        await pool.query(
+          `INSERT INTO attendance (session_id, student_id, status)
+                 VALUES ($1, $2, 'absent')`,
+          [sessionId, student.id],
+        );
+      }
+
+      res.json({
+        message: "Session ended successfully",
+        totalAbsent: absentStudents.length,
+        totalPresent: presentIds.length,
+      });
+    } catch (err) {
+      res
+        .status(500)
+        .json({ message: "Error ending session", error: err.message });
+    }
+  },
+);
 
 app.get("/admin/lecturers", verifyToken, verifyAdmin, async (req, res) => {
-    try {
-        const result = await pool.query(
-            `SELECT id, first_name, last_name, email, created_at 
-             FROM lecturers ORDER BY first_name`
-        );
+  try {
+    const result = await pool.query(
+      `SELECT id, first_name, last_name, email, created_at 
+             FROM lecturers ORDER BY first_name`,
+    );
 
-        res.json({
-            message: "Lecturers retrieved successfully",
-            total: result.rows.length,
-            lecturers: result.rows
-        });
-
-    } catch (err) {
-        res.status(500).json({ message: "Error retrieving lecturers", error: err.message });
-    }
+    res.json({
+      message: "Lecturers retrieved successfully",
+      total: result.rows.length,
+      lecturers: result.rows,
+    });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error retrieving lecturers", error: err.message });
+  }
 });
 
 app.get("/admin/students", verifyToken, verifyAdmin, async (req, res) => {
-    try {
-        const result = await pool.query(
-            `SELECT 
+  try {
+    const result = await pool.query(
+      `SELECT 
                 students.id,
                 students.first_name,
                 students.last_name,
@@ -302,54 +399,57 @@ app.get("/admin/students", verifyToken, verifyAdmin, async (req, res) => {
                 students.created_at
              FROM students
              JOIN programs ON students.program_id = programs.id
-             ORDER BY students.first_name`
-        );
+             ORDER BY students.first_name`,
+    );
 
-        res.json({
-            message: "Students retrieved successfully",
-            total: result.rows.length,
-            students: result.rows
-        });
-
-    } catch (err) {
-        res.status(500).json({ message: "Error retrieving students", error: err.message });
-    }
+    res.json({
+      message: "Students retrieved successfully",
+      total: result.rows.length,
+      students: result.rows,
+    });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error retrieving students", error: err.message });
+  }
 });
 
-app.get("/session/:sessionId/attendance", verifyToken, async(req, res) =>{
-    const {sessionId} = req.params
+app.get("/session/:sessionId/attendance", verifyToken, async (req, res) => {
+  const { sessionId } = req.params;
 
-    try{
-            const result = await pool.query(
-        `SELECT 
+  try {
+    const result = await pool.query(
+      `SELECT 
             students.registration_number,
             students.first_name,
             students.last_name,
             attendance.marked_at
         FROM attendance
         JOIN students ON attendance.student_id = students.id
-        WHERE attendance.session_id = $1`, [sessionId]
+        WHERE attendance.session_id = $1`,
+      [sessionId],
     );
 
     res.json({
-        message: "Attendance retrieved succesifully",
-        total: result.rows.length,
-        attendance:result.rows
-    })
-
-    }catch (err){
-        res.status(500).json({message: "error while retrieving attendance list", error: err.message})
-    }
-
-
-})
+      message: "Attendance retrieved succesifully",
+      total: result.rows.length,
+      attendance: result.rows,
+    });
+    console.log(result);
+  } catch (err) {
+    res.status(500).json({
+      message: "error while retrieving attendance list",
+      error: err.message,
+    });
+  }
+});
 
 app.get("/student/attendance", verifyToken, async (req, res) => {
-    const studentId = req.user.id;
+  const studentId = req.user.id;
 
-    try {
-        const result = await pool.query(
-            `SELECT 
+  try {
+    const result = await pool.query(
+      `SELECT 
                 modules.name AS module_name,
                 sessions.created_at AS session_date,
                 attendance.marked_at
@@ -357,26 +457,31 @@ app.get("/student/attendance", verifyToken, async (req, res) => {
              JOIN sessions ON attendance.session_id = sessions.id
              JOIN modules ON sessions.module_id = modules.id
              WHERE attendance.student_id = $1`,
-            [studentId]
-        );
+      [studentId],
+    );
 
-        res.json({
-            message: "Attendance record retrieved successfully",
-            total: result.rows.length,
-            attendance: result.rows
-        });
-
-    } catch (err) {
-        res.status(500).json({ message: "Error retrieving attendance", error: err.message });
-    }
+    res.json({
+      message: "Attendance record retrieved successfully",
+      total: result.rows.length,
+      attendance: result.rows,
+    });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error retrieving attendance", error: err.message });
+  }
 });
 
-app.get("/module/:moduleId/sessions", verifyToken, verifyLecturer, async (req, res) => {
+app.get(
+  "/module/:moduleId/sessions",
+  verifyToken,
+  verifyLecturer,
+  async (req, res) => {
     const { moduleId } = req.params;
 
     try {
-        const result = await pool.query(
-            `SELECT 
+      const result = await pool.query(
+        `SELECT 
                 sessions.id,
                 sessions.session_code,
                 sessions.expires_at,
@@ -386,57 +491,63 @@ app.get("/module/:moduleId/sessions", verifyToken, verifyLecturer, async (req, r
              LEFT JOIN attendance ON attendance.session_id = sessions.id
              WHERE sessions.module_id = $1
              GROUP BY sessions.id`,
-            [moduleId]
-        );
+        [moduleId],
+      );
 
-        res.json({
-            message: "Sessions retrieved successfully",
-            total: result.rows.length,
-            sessions: result.rows
-        });
-
+      res.json({
+        message: "Sessions retrieved successfully",
+        total: result.rows.length,
+        sessions: result.rows,
+      });
     } catch (err) {
-        res.status(500).json({ message: "Error retrieving sessions", error: err.message });
+      res
+        .status(500)
+        .json({ message: "Error retrieving sessions", error: err.message });
     }
-});
-
+  },
+);
 
 app.get("/schools", async (req, res) => {
-    try {
-        const result = await pool.query(`SELECT * FROM schools ORDER BY name`);
-        res.json({ schools: result.rows });
-    } catch (err) {
-        res.status(500).json({ message: "Error fetching schools", error: err.message });
-    }
+  try {
+    const result = await pool.query(`SELECT * FROM schools ORDER BY name`);
+    res.json({ schools: result.rows });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error fetching schools", error: err.message });
+  }
 });
 
 app.get("/departments/:schoolId", async (req, res) => {
-    const { schoolId } = req.params;
-    try {
-        const result = await pool.query(
-            `SELECT * FROM departments WHERE school_id = $1 ORDER BY name`,
-            [schoolId]
-        );
-        res.json({ departments: result.rows });
-    } catch (err) {
-        res.status(500).json({ message: "Error fetching departments", error: err.message });
-    }
+  const { schoolId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM departments WHERE school_id = $1 ORDER BY name`,
+      [schoolId],
+    );
+    res.json({ departments: result.rows });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error fetching departments", error: err.message });
+  }
 });
 
 app.get("/programs/:departmentId", async (req, res) => {
-    const { departmentId } = req.params;
-    try {
-        const result = await pool.query(
-            `SELECT * FROM programs WHERE department_id = $1 ORDER BY name`,
-            [departmentId]
-        );
-        res.json({ programs: result.rows });
-    } catch (err) {
-        res.status(500).json({ message: "Error fetching programs", error: err.message });
-    }
+  const { departmentId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM programs WHERE department_id = $1 ORDER BY name`,
+      [departmentId],
+    );
+    res.json({ programs: result.rows });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "Error fetching programs", error: err.message });
+  }
 });
 
-app.listen(port, ()=>{
-    console.log(`server running at port ${3000}`)
+app.listen(port, () => {
+  console.log(`server running at port ${3000}`);
 });
-
