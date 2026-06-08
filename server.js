@@ -28,7 +28,7 @@ app.post("/session/start", verifyToken, verifyLecturer, async (req, res) => {
 
   const sessionCode = uuidv4().slice(0, 8).toLocaleUpperCase();
 
-  const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
   try {
     const result = await pool.query(
       `INSERT INTO sessions (module_id,session_code, expires_at)
@@ -452,6 +452,7 @@ app.get("/student/attendance", verifyToken, async (req, res) => {
       `SELECT 
                 modules.name AS module_name,
                 sessions.created_at AS session_date,
+                attendance.status,
                 attendance.marked_at
              FROM attendance
              JOIN sessions ON attendance.session_id = sessions.id
