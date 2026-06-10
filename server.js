@@ -24,25 +24,50 @@ app.get("/", (req, res) => {
 });
 
 app.post("/session/start", verifyToken, verifyLecturer, async (req, res) => {
-  const { module_id, lecturer_id } = req.body;
+  const { module_id } = req.body;
 
-  const sessionCode = uuidv4().slice(0, 8).toLocaleUpperCase();
-
+  const sessionCode = uuidv4().slice(0, 8).toUpperCase();
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
   try {
     const result = await pool.query(
-      `INSERT INTO sessions (module_id,session_code, expires_at)
-             VALUES ($1, $2, $3) RETURNING *`,
+      `INSERT INTO sessions (module_id, session_code, expires_at)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
       [module_id, sessionCode, expiresAt],
     );
+
+    const sessionId = result.rows[0].id;
+
+    const studentsResult = await pool.query(
+      `SELECT id
+       FROM students
+       WHERE program_id = (
+         SELECT program_id
+         FROM modules
+         WHERE id = $1
+       )`,
+      [module_id],
+    );
+
+    for (const student of studentsResult.rows) {
+      await pool.query(
+        `INSERT INTO attendance
+         (session_id, student_id, status)
+         VALUES ($1, $2, 'absent')`,
+        [sessionId, student.id],
+      );
+    }
+
     res.json({
       message: "Session started",
       session: result.rows[0],
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error starting session", error: err.message });
+    res.status(500).json({
+      message: "Error starting session",
+      error: err.message,
+    });
   }
 });
 
@@ -56,30 +81,47 @@ app.post("/attendance/mark", verifyToken, async (req, res) => {
       [session_code],
     );
 
-    if (session.rows.length == 0) {
-      return res.status(404).json({ message: "invalid session" });
+    if (session.rows.length === 0) {
+      return res.status(404).json({
+        message: "Invalid session code",
+      });
     }
+
     const now = new Date();
     const expiry = new Date(session.rows[0].expires_at);
 
     if (now > expiry) {
       return res.status(400).json({
-        message: "QR code has expired. Ask your lecturer to regenerate.",
+        message:
+          "QR code has expired. Ask your lecturer to generate a new one.",
       });
     }
-    const sessionResult = await pool.query(
-      `INSERT INTO attendance (session_id, student_id) VALUES ($1, $2)
-     RETURNING *`,
+
+    const attendanceResult = await pool.query(
+      `UPDATE attendance
+       SET status = 'present',
+           marked_at = CURRENT_TIMESTAMP
+       WHERE session_id = $1
+       AND student_id = $2
+       RETURNING *`,
       [session.rows[0].id, student_id],
     );
+
+    if (attendanceResult.rows.length === 0) {
+      return res.status(404).json({
+        message: "Attendance record not found for this student.",
+      });
+    }
+
     res.json({
-      message: "Attendance marked present",
-      attendance: sessionResult.rows[0],
+      message: "Attendance marked successfully",
+      attendance: attendanceResult.rows[0],
     });
   } catch (err) {
-    res
-      .status(500)
-      .json({ message: "error while marking the attendance", error: err });
+    res.status(500).json({
+      message: "Error while marking attendance",
+      error: err.message,
+    });
   }
 });
 
@@ -110,7 +152,7 @@ app.post("/student/register", async (req, res) => {
     );
 
     res.json({
-      message: "student registered successifully",
+      message: "Student registered successfully",
       student: result.rows[0],
     });
   } catch (err) {
@@ -120,10 +162,9 @@ app.post("/student/register", async (req, res) => {
           "A student with that email or registration number already exists.",
       });
     }
-    res.status(500).json({
-      message: "Error while registering a student",
-      error: err.message,
-    });
+    res
+      .status(500)
+      .json({ message: "Error registering student", error: err.message });
   }
 });
 
@@ -257,8 +298,7 @@ app.post("/admin/login", async (req, res) => {
     const token = jsonwebtoken.sign(
       {
         id: admin.id,
-        email: admin.email,
-        password: admin.password,
+        email: admin.emai,
         role: "admin",
         first_name: admin.first_name,
         last_name: admin.last_name,
@@ -316,48 +356,20 @@ app.post(
     const { sessionId } = req.params;
 
     try {
-      const sessionResult = await pool.query(
-        `SELECT sessions.id, sessions.module_id, modules.program_id 
-             FROM sessions 
-             JOIN modules ON sessions.module_id = modules.id
-             WHERE sessions.id = $1`,
-        [sessionId],
-      );
-
-      if (sessionResult.rows.length === 0) {
-        return res.status(404).json({ message: "Session not found." });
-      }
-
-      const { module_id, program_id } = sessionResult.rows[0];
-
-      const studentsResult = await pool.query(
-        `SELECT id FROM students WHERE program_id = $1`,
-        [program_id],
-      );
-
       const presentResult = await pool.query(
-        `SELECT student_id FROM attendance WHERE session_id = $1`,
+        `SELECT COUNT(*) FROM attendance WHERE session_id = $1 AND status = 'present'`,
         [sessionId],
       );
 
-      const presentIds = presentResult.rows.map((row) => row.student_id);
-
-      const absentStudents = studentsResult.rows.filter(
-        (student) => !presentIds.includes(student.id),
+      const absentResult = await pool.query(
+        `SELECT COUNT(*) FROM attendance WHERE session_id = $1 AND status = 'absent'`,
+        [sessionId],
       );
-
-      for (const student of absentStudents) {
-        await pool.query(
-          `INSERT INTO attendance (session_id, student_id, status)
-                 VALUES ($1, $2, 'absent')`,
-          [sessionId, student.id],
-        );
-      }
 
       res.json({
         message: "Session ended successfully",
-        totalAbsent: absentStudents.length,
-        totalPresent: presentIds.length,
+        totalPresent: parseInt(presentResult.rows[0].count),
+        totalAbsent: parseInt(absentResult.rows[0].count),
       });
     } catch (err) {
       res
