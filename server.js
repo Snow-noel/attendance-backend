@@ -6,16 +6,22 @@ const jsonwebtoken = require("jsonwebtoken");
 
 const { verifyToken, verifyLecturer, verifyAdmin } = require("./malware");
 
+const SendMail = require("./emailService");
+
+const crypto = require("crypto");
+
 const express = require("express");
 
 const app = express();
 
+const cors = require("cors");
+
 const port = 3000;
 
-const cors = require("cors");
 app.use(cors({ origin: "http://localhost:5173" }));
 
 const { v4: uuidv4 } = require("uuid");
+const { error } = require("console");
 
 app.use(express.json());
 
@@ -379,6 +385,87 @@ app.post(
   },
 );
 
+app.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const studentResult = await pool.query(
+      `SELECT email FROM students WHERE email = $1`,
+      [email],
+    );
+
+    if (studentResult.rows.length == 0) {
+      return res.status(404).json("user not found");
+    }
+    const token = crypto.randomBytes(32).toString("hex");
+
+    const expiry = new Date(Date.now() + 60 * 60 * 1000);
+    const insertResult = await pool.query(
+      `UPDATE students SET reset_token = $2, reset_token_expiry = $3 WHERE email = $1 `,
+      [email, token, expiry],
+    );
+    const resetLink = `http://localhost:5173/reset-password?token=${token}`;
+    const message = `
+    <h2>Password Reset Link</h2>
+    <p>click the link below to reset your password. this link will expire in 1 hour</p>
+    <a href = ${resetLink}>Reset Password</a>
+    <h4>If you did not send an email please ignore this</h4>
+    `;
+    await SendMail(
+      studentResult.rows[0].email,
+      "password reset link ",
+      message,
+    );
+    console.log("Student result:", studentResult.rows);
+    res.json({
+      message: "password reset link sent to your email",
+      token: token,
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "error while sending the link",
+      error: err.message,
+    });
+  }
+});
+
+app.post("/reset/password", async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  try {
+    const resetPasswordResult = await pool.query(
+      `SELECT * FROM students WHERE reset_token = $1`,
+      [token],
+    );
+
+    if (resetPasswordResult.rows.length == 0) {
+      return res.status(404).json("user not found");
+    }
+
+    const student = resetPasswordResult.rows[0];
+
+    if (new Date() > new Date(student.reset_token_expiry)) {
+      return res.status(400).json({ message: "Reset link has expired." });
+    }
+
+    const hashedNewpassword = await bcrypt.hash(newPassword, 12);
+
+    const reset = await pool.query(
+      `UPDATE students SET password = $2 WHERE reset_token = $1`,
+      [token, hashedNewpassword],
+    );
+    await pool.query(
+      `UPDATE students SET reset_token=NULL, reset_token_expiry=NULL WHERE reset_token=$1`,
+      [token],
+    );
+    res.json({
+      message: "password changed successifully",
+    });
+  } catch (err) {
+    res
+      .status(500)
+      .json({ message: "error while changing password", error: err.message });
+  }
+});
 app.get("/admin/lecturers", verifyToken, verifyAdmin, async (req, res) => {
   try {
     const result = await pool.query(
