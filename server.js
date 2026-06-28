@@ -403,7 +403,7 @@ app.post("/forgot-password", async (req, res) => {
       `UPDATE students SET reset_token = $2, reset_token_expiry = $3 WHERE email = $1 `,
       [email, token, expiry],
     );
-    const resetLink = `http://localhost:5173/reset-password?token=${token}`;
+    const resetLink = `http://localhost:5173/reset/password?token=${token}`;
     const message = `
     <h2>Password Reset Link</h2>
     <p>click the link below to reset your password. this link will expire in 1 hour</p>
