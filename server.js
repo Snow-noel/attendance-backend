@@ -183,7 +183,7 @@ app.post("/student/login", async (req, res) => {
     ]);
 
     if (result.rows.length == 0) {
-      return res.status(404).json({ message: "Student not found" });
+      return res.status(401).json({ message: "invalid email or password" });
     }
 
     const student = result.rows[0];
