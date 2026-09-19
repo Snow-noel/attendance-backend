@@ -28,55 +28,60 @@ app.get("/", (req, res) => {
   res.json({ message: "Attendance server is running" });
 });
 
-app.post("/session/start", verifyToken, verifyLecturer, async (req, res) => {
-  const { module_id } = req.body;
+app.post(
+  "/lecturer/session/start",
+  verifyToken,
+  verifyLecturer,
+  async (req, res) => {
+    const { module_id } = req.body;
 
-  const sessionCode = uuidv4().slice(0, 8).toUpperCase();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const sessionCode = uuidv4().slice(0, 8).toUpperCase();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-  try {
-    const result = await pool.query(
-      `INSERT INTO sessions (module_id, session_code, expires_at)
+    try {
+      const result = await pool.query(
+        `INSERT INTO sessions (module_id, session_code, expires_at)
        VALUES ($1, $2, $3)
        RETURNING *`,
-      [module_id, sessionCode, expiresAt],
-    );
+        [module_id, sessionCode, expiresAt],
+      );
 
-    const sessionId = result.rows[0].id;
+      const sessionId = result.rows[0].id;
 
-    const studentsResult = await pool.query(
-      `SELECT id
+      const studentsResult = await pool.query(
+        `SELECT id
        FROM students
        WHERE program_id = (
          SELECT program_id
          FROM modules
          WHERE id = $1
        )`,
-      [module_id],
-    );
+        [module_id],
+      );
 
-    for (const student of studentsResult.rows) {
-      await pool.query(
-        `INSERT INTO attendance
+      for (const student of studentsResult.rows) {
+        await pool.query(
+          `INSERT INTO attendance
          (session_id, student_id, status)
          VALUES ($1, $2, 'absent')`,
-        [sessionId, student.id],
-      );
+          [sessionId, student.id],
+        );
+      }
+
+      res.json({
+        message: "Session started",
+        session: result.rows[0],
+      });
+    } catch (err) {
+      res.status(500).json({
+        message: "Error starting session",
+        error: err.message,
+      });
     }
+  },
+);
 
-    res.json({
-      message: "Session started",
-      session: result.rows[0],
-    });
-  } catch (err) {
-    res.status(500).json({
-      message: "Error starting session",
-      error: err.message,
-    });
-  }
-});
-
-app.post("/attendance/mark", verifyToken, async (req, res) => {
+app.post("/student/attendance/mark", verifyToken, async (req, res) => {
   const { session_code } = req.body;
   const student_id = req.user.id;
 
@@ -354,7 +359,7 @@ app.post(
 );
 
 app.post(
-  "/session/:sessionId/end",
+  "/lecturer/session/:sessionId/end",
   verifyToken,
   verifyLecturer,
   async (req, res) => {
@@ -512,12 +517,15 @@ app.get("/admin/students", verifyToken, verifyAdmin, async (req, res) => {
   }
 });
 
-app.get("/session/:sessionId/attendance", verifyToken, async (req, res) => {
-  const { sessionId } = req.params;
+app.get(
+  "/lecturer/session/:sessionId/attendance",
+  verifyToken,
+  async (req, res) => {
+    const { sessionId } = req.params;
 
-  try {
-    const result = await pool.query(
-      `SELECT 
+    try {
+      const result = await pool.query(
+        `SELECT 
             students.registration_number,
             students.first_name,
             students.last_name,
@@ -525,22 +533,23 @@ app.get("/session/:sessionId/attendance", verifyToken, async (req, res) => {
         FROM attendance
         JOIN students ON attendance.student_id = students.id
         WHERE attendance.session_id = $1`,
-      [sessionId],
-    );
+        [sessionId],
+      );
 
-    res.json({
-      message: "Attendance retrieved succesifully",
-      total: result.rows.length,
-      attendance: result.rows,
-    });
-    console.log(result);
-  } catch (err) {
-    res.status(500).json({
-      message: "error while retrieving attendance list",
-      error: err.message,
-    });
-  }
-});
+      res.json({
+        message: "Attendance retrieved succesifully",
+        total: result.rows.length,
+        attendance: result.rows,
+      });
+      console.log(result);
+    } catch (err) {
+      res.status(500).json({
+        message: "error while retrieving attendance list",
+        error: err.message,
+      });
+    }
+  },
+);
 
 app.get("/student/attendance/:moduleId", verifyToken, async (req, res) => {
   const studentId = req.user.id;
@@ -602,7 +611,7 @@ app.get("/student/modules", verifyToken, async (req, res) => {
 });
 
 app.get(
-  "/module/:moduleId/sessions",
+  "/lecturer/module/:moduleId/sessions",
   verifyToken,
   verifyLecturer,
   async (req, res) => {
