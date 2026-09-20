@@ -18,7 +18,14 @@ const cors = require("cors");
 
 const port = 3000;
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://kjz1f9hm-5173.uks1.devtunnels.ms",
+    ],
+  }),
+);
 
 const { v4: uuidv4 } = require("uuid");
 const { error } = require("console");
